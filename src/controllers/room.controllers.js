@@ -3,19 +3,53 @@ const { ApiResponse } = require('../utils/ApiResponse.js');
 const { asyncHandler } = require('../utils/asyncHandler.js');
 const Room = require('../models/room.models.js');
 const { v4: uniqueId } = require('uuid');
-const { emitSocketEvent } = require('../socket/index.js');
-const { ChatEventEnum } = require('../constants.js');
+
+const getRoomById = asyncHandler(async (req, res) => {
+  const { roomId } = req.params;
+  const room = await Room.findOne({
+    roomId: roomId,
+  });
+  if (!room) {
+    throw new ApiError(404, 'Room not found');
+  }
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { room }, 'Room retrieved successfully'));
+});
 
 const createRoom = asyncHandler(async (req, res) => {
-  // create room logic here
+  const roomId = uniqueId().slice(0, 12);
+
+  // Create the room in the database
   const room = await Room.create({
     admin: req?.user?._id,
-    roomId: uniqueId().slice(0, 12),
+    roomId: roomId,
+    participants: [req?.user?._id],
   });
 
   if (!room) {
     throw new ApiError(500, 'Failed to create room');
   }
+
+  // Access Socket.IO instance
+  const io = req.app.get('io');
+  if (!io) {
+    throw new ApiError(500, 'Socket.IO instance not found');
+  }
+
+  // Find the user's socket
+  const userSocket = [...io.sockets.sockets.values()].find(
+    (socket) =>
+      socket.user && socket.user._id.toString() === req?.user?._id.toString()
+  );
+
+  if (!userSocket) {
+    throw new ApiError(500, 'Failed to find user socket to join the room');
+  }
+
+  // Add the user to the Socket.IO room
+  userSocket.join(roomId);
 
   return res
     .status(201)
@@ -66,4 +100,5 @@ const joinRoom = asyncHandler(async (req, res) => {
 module.exports = {
   createRoom,
   joinRoom,
+  getRoomById,
 };

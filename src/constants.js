@@ -51,7 +51,7 @@ const ChatEventEnum = Object.freeze({
 
 const AvailableChatEvents = Object.values(ChatEventEnum);
 
-const RoomLinkFormat = 'chicchat.com/room/join=';
+const RoomLinkFormat = 'https://chicchat.com/room/join=';
 
 module.exports = {
   DB_NAME,
