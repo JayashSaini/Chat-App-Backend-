@@ -6,16 +6,75 @@ const { v4: uniqueId } = require('uuid');
 
 const getRoomById = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
-  const room = await Room.findOne({
-    roomId: roomId,
-  });
-  if (!room) {
+
+  if (!roomId) {
+    throw new ApiError(400, 'Room ID is required');
+  }
+
+  const aggregationPipeline = [
+    // Convert the strings in participants array to ObjectId if necessary
+    {
+      $match: {
+        roomId: roomId,
+      },
+    },
+    {
+      $addFields: {
+        participants: {
+          $map: {
+            input: '$participants',
+            as: 'participant',
+            in: { $toObjectId: '$$participant' }, // Convert string to ObjectId
+          },
+        },
+      },
+    },
+    // Lookup user details for each participant ID
+    {
+      $lookup: {
+        from: 'users', // Replace with your actual users collection name
+        localField: 'participants', // Array of participant IDs
+        foreignField: '_id', // Match with the _id field in users collection
+        as: 'participants_details', // New field to store user details
+      },
+    },
+
+    // Optionally project only the fields you need
+    {
+      $project: {
+        _id: 1,
+        roomId: 1,
+        admin: 1,
+        participants: 1,
+        participants_details: 1,
+        isActive: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
+  ];
+
+  const roomDetails = await Room.aggregate(aggregationPipeline).exec();
+
+  if (!roomDetails || roomDetails.length === 0) {
     throw new ApiError(404, 'Room not found');
   }
+  const participants = roomDetails[0].participants_details;
+  const updatedParticipants = participants.filter(
+    (p) => p._id.toString() !== req.user?._id.toString()
+  );
+
+  delete roomDetails[0].participants_details;
 
   return res
     .status(200)
-    .json(new ApiResponse(200, { room }, 'Room retrieved successfully'));
+    .json(
+      new ApiResponse(
+        200,
+        { participants: updatedParticipants, room: roomDetails[0] },
+        'Room retrieved successfully'
+      )
+    );
 });
 
 const createRoom = asyncHandler(async (req, res) => {

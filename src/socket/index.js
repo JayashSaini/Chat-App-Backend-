@@ -26,44 +26,72 @@ const mountParticipantStoppedTypingEvent = (socket) => {
   });
 };
 
+const mountNotifyNewUserJoined = (socket, io) => {
+  socket.on('participant:join:notify', (roomId, user) => {
+    const userSocket = [...io.sockets.sockets.values()].find(
+      (socket) => socket?.user?._id.toString() === user?._id.toString()
+    );
+
+    if (!userSocket) {
+      return socket.emit('error', {
+        message: 'Failed to find user socket to join the room',
+      });
+    }
+    const socketId = userSocket.id;
+    // Notify all participants in the room that the user has joined
+    socket.to(roomId.toString()).emit('user:joined', {
+      user: user,
+      socketId: socketId,
+    });
+  });
+};
+
 // Video Calling Events (for multiple participants)
-const mountVideoCallEvents = (socket, io) => {
+const mountAdminRoomEvents = (socket, io) => {
   // Ask admin to join the room
-  socket.on(ChatEventEnum.ADMIN_JOIN_REQUEST_EVENT, async (data) => {
-    const { user, roomId, socketId } = data;
+  socket.on('admin:join-request', async (data) => {
+    const { user, roomId } = data;
     try {
       const room = await Room.findOne({ roomId });
 
       if (room?.admin) {
+        // Find the socket connected to the user
+        const userSocket = [...io.sockets.sockets.values()].find(
+          (socket) => socket?.user?._id.toString() === user?._id.toString()
+        );
+
+        if (!userSocket) {
+          return socket.emit('error', {
+            message: 'User socket not found',
+          });
+        }
+        const socketId = userSocket?.id;
+
         // check the requested user is already an admin
         if (user?._id?.toString() == room?.admin?.toString()) {
+          await userSocket.join(room.roomId.toString());
+
           io.to(user?._id?.toString()).emit('room:join:approved', { roomId });
 
-          // Notify all participants in the room that the user has joined
-          io.to(roomId.toString()).emit('user:joined', {
-            username: user?.username,
-          });
           return;
         }
 
         // Check user is already in the room
         const participant = room.participants.find(
-          (participant) => participant === user?._id.toString()
+          (participant) => participant.toString() === user?._id.toString()
         );
         if (participant) {
+          // Connect User Socket to room id
+          await userSocket.join(room.roomId.toString());
+
           // Notify the approved user
           io.to(socketId).emit('room:join:approved', { roomId });
 
-          // Notify all participants in the room that the user has joined
-          io.to(roomId.toString()).emit('user:joined', {
-            username: user?.username,
-          });
           return;
         }
 
-        io.to(room.admin.toString()).emit('admin:room-join-request', {
+        io.to(room.admin.toString()).emit('admin:user-join-request', {
           user,
-          roomId,
         });
       } else {
         socket.emit('error', { message: 'Room or admin not found' });
@@ -75,19 +103,19 @@ const mountVideoCallEvents = (socket, io) => {
 
   // Handle admin's approval of user joining the room
   socket.on('admin:approve-user', async (data) => {
-    const { roomId, userId, username } = data;
+    const { roomId, user } = data;
 
     // Validate the presence of roomId and userId
-    if (!roomId || !userId) {
+    if (!roomId || !user) {
       return socket.emit('error', {
-        message: 'Room ID and User ID are required',
+        message: 'Room ID and User are required',
       });
     }
 
     try {
       // Find the socket connected to the user
       const userSocket = [...io.sockets.sockets.values()].find(
-        (socket) => socket?.user?._id.toString() === userId
+        (socket) => socket?.user?._id.toString() === user?._id.toString()
       );
 
       if (!userSocket) {
@@ -99,7 +127,7 @@ const mountVideoCallEvents = (socket, io) => {
       // Find and update the room, adding the user's socket ID to participants
       const room = await Room.findOneAndUpdate(
         { roomId },
-        { $addToSet: { participants: userId } }, // Add socketId to participants without duplicates
+        { $addToSet: { participants: user?._id.toString() } }, // Add socketId to participants without duplicates
         { new: true }
       );
 
@@ -109,14 +137,8 @@ const mountVideoCallEvents = (socket, io) => {
       // Notify the approved user to join the room
       io.to(socketId).emit('room:join:approved', { roomId });
 
-      // Notify all participants in the room that a new user has joined
-      io.to(roomId.toString()).emit('user:joined', {
-        username,
-        userId: userId,
-      });
-
       // Add the user to the Socket.IO room
-      userSocket.join(roomId.toString());
+      await userSocket.join(roomId.toString());
     } catch (error) {
       // Catch and handle errors during room data update
       socket.emit('error', {
@@ -141,7 +163,7 @@ const mountVideoCallEvents = (socket, io) => {
 
       // Notify the rejected user
       io.to(socketId).emit('room:join:rejected', {
-        message: 'Your request to join the room was rejected by the admin.',
+        message: 'Your join request was declined by the admin.',
       });
     } catch (error) {
       // Catch and handle errors during user rejection
@@ -151,25 +173,50 @@ const mountVideoCallEvents = (socket, io) => {
       });
     }
   });
+};
 
-  // Handle 'offer' event
-  socket.on('offer', ({ offer, userId }) => {
-    const senderSocketId = userIdToSocketIdMap.get(userId.toString());
-    console.log(`Sending offer to ${senderSocketId}`);
-    io.to(senderSocketId).emit('offer', offer, senderSocketId);
+const mountConnectionSharingEvent = (socket, io) => {
+  // Handle offer
+  socket.on('offer', (offer, to, { userId, mediaState }) => {
+    const userSocket = [...io.sockets.sockets.values()].find(
+      (socket) => socket?.user?._id.toString() === userId.toString()
+    );
+    if (!userSocket) {
+      return socket.emit('error', { message: 'User socket not found' });
+    }
+    const socketId = userSocket.id;
+    console.log('offer send to : ', to);
+    socket.to(to).emit('offer', offer, socketId, { userId, mediaState }); // Send offer to specific user
   });
 
-  // Handle 'answer' event
-  socket.on('answer', ({ answer, senderSocketId }) => {
-    console.log(`Sending answer to ${senderSocketId}`);
-    io.to(senderSocketId).emit('answer', answer, socket.id);
+  // Handle answer
+  socket.on('answer', (answer, to, { userId, mediaState }) => {
+    console.log('answer send to : ', to);
+    const userSocket = [...io.sockets.sockets.values()].find(
+      (socket) => socket?.user?._id.toString() === userId.toString()
+    );
+    if (!userSocket) {
+      return socket.emit('error', { message: 'User socket not found' });
+    }
+    const socketId = userSocket.id;
+    socket.to(to).emit('answer', answer, socketId, { userId, mediaState }); // Send answer to specific user
   });
 
-  // Forward ICE candidate from one user to the other
-  socket.on('ice-candidate', (candidate, targetSocketId) => {
-    io.to(targetSocketId).emit('ice-candidate', candidate, socket.id);
+  // Handle ICE candidates
+  socket.on('ice-candidate', (candidate, to, userId) => {
+    console.log('ice-candidate send to : ', to);
+    const userSocket = [...io.sockets.sockets.values()].find(
+      (socket) => socket?.user?._id.toString() === userId.toString()
+    );
+    if (!userSocket) {
+      return socket.emit('error', { message: 'User socket not found' });
+    }
+    const socketId = userSocket.id;
+    socket.to(to).emit('ice-candidate', candidate, socketId); // Send ICE candidate
   });
+};
 
+const mountLeaveRoom = (socket, io) => {
   socket.on('leave-room', async (data) => {
     try {
       const { roomId, user } = data;
@@ -198,21 +245,14 @@ const mountVideoCallEvents = (socket, io) => {
 
       // Notify participants BEFORE user leaves the room
       if (room.admin.toString() === user._id.toString()) {
-        io.to(roomId.toString()).emit('admin:leave', {
-          username: user.username,
+        io.to(roomId.toString()).emit('user:leave', {
+          userId: user._id.toString(),
         });
-        await Room.findOneAndUpdate(
-          { roomId },
-          { isActive: false, participants: [] }
-        );
+        await Room.findOneAndUpdate({ roomId }, { isActive: false });
       } else {
         io.to(roomId.toString()).emit('user:leave', {
-          username: user.username,
+          userId: user._id.toString(),
         });
-        await Room.findOneAndUpdate(
-          { roomId },
-          { $pull: { participants: user._id } }
-        );
       }
 
       // Remove the user from the socket.io room
@@ -223,6 +263,12 @@ const mountVideoCallEvents = (socket, io) => {
         message: 'An error occurred while leaving the room',
       });
     }
+  });
+};
+const moundParticipantMediaUpdate = (socket) => {
+  socket.on('user:media-update', (roomId, userId, mediaState) => {
+    console.log('participant media update in room: ', roomId);
+    socket.to(roomId).emit('participant:media-update', userId, mediaState);
   });
 };
 
@@ -261,7 +307,11 @@ const initializeSocketIO = (io) => {
       mountJoinChatEvent(socket);
       mountParticipantTypingEvent(socket);
       mountParticipantStoppedTypingEvent(socket);
-      mountVideoCallEvents(socket, io);
+      mountAdminRoomEvents(socket, io);
+      mountConnectionSharingEvent(socket, io);
+      mountLeaveRoom(socket, io);
+      moundParticipantMediaUpdate(socket);
+      mountNotifyNewUserJoined(socket, io);
 
       socket.on(ChatEventEnum.DISCONNECT_EVENT, () => {
         console.log('User disconnected 🚫. userId: ' + socket.user?._id);

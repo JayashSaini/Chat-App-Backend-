@@ -1,7 +1,7 @@
 {
-  "name": "mysql-backend",
+  "name": "chichat-backend",
   "version": "1.0.0",
-  "description": "An e-commerce platform powered by both MySQL and MongoDB backends, offering seamless transactions and efficient data management to enhance the user experience",
+  "description": "An real time chat & video stream application",
   "main": "index.js",
   "scripts": {
     "build": "npm install",

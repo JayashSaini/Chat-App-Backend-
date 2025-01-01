@@ -19,12 +19,6 @@ const USER_OTP_EXPIRY = 2;
 
 const ChatEventEnum = Object.freeze({
   // ? when send a join room request
-  JOIN_ROOM_OFFER: 'joinRoomOffer',
-
-  ADMIN_JOIN_REQUEST_EVENT: 'adminJoinRequestEvent',
-
-  USER_JOINED: 'userJoined',
-
   // ? once user is ready to go
   CONNECTED_EVENT: 'connected',
   // ? when user gets disconnected
