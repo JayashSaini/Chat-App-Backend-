@@ -46,6 +46,18 @@ const mountNotifyNewUserJoined = (socket, io) => {
   });
 };
 
+const mountParticipantFeatures = (socket) => {
+  socket.on('user:emoji:reaction', ({ userId, emoji, roomId }) => {
+    socket
+      .in(roomId.toString())
+      .emit('participant:emoji:reaction', { userId, emoji });
+  });
+  socket.on('user:hand:raised', ({ userId, roomId }) => {
+    console.log('called user:hand:raised');
+    socket.in(roomId.toString()).emit('participant:hand:raised', { userId });
+  });
+};
+
 // Video Calling Events (for multiple participants)
 const mountAdminRoomEvents = (socket, io) => {
   // Ask admin to join the room
@@ -267,7 +279,6 @@ const mountLeaveRoom = (socket, io) => {
 };
 const moundParticipantMediaUpdate = (socket) => {
   socket.on('user:media-update', (roomId, userId, mediaState) => {
-    console.log('participant media update in room: ', roomId);
     socket.to(roomId).emit('participant:media-update', userId, mediaState);
   });
 };
@@ -312,6 +323,7 @@ const initializeSocketIO = (io) => {
       mountLeaveRoom(socket, io);
       moundParticipantMediaUpdate(socket);
       mountNotifyNewUserJoined(socket, io);
+      mountParticipantFeatures(socket);
 
       socket.on(ChatEventEnum.DISCONNECT_EVENT, () => {
         console.log('User disconnected 🚫. userId: ' + socket.user?._id);
