@@ -3,6 +3,8 @@ const { ApiResponse } = require('../utils/ApiResponse.js');
 const { asyncHandler } = require('../utils/asyncHandler.js');
 const Room = require('../models/room.models.js');
 const { v4: uniqueId } = require('uuid');
+const bcrypt = require('bcrypt');
+const { emitSocketEvent } = require('../socket/index');
 
 const getRoomById = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
@@ -50,6 +52,8 @@ const getRoomById = asyncHandler(async (req, res) => {
         isActive: 1,
         createdAt: 1,
         updatedAt: 1,
+        invites: 1,
+        isChatEnable: 1,
       },
     },
   ];
@@ -139,10 +143,11 @@ const joinRoom = asyncHandler(async (req, res) => {
   if (!room?.isActive) {
     throw new ApiError(403, 'Room is not active');
   }
+  console.log('password : ', password);
   if (!link?.length > 0) {
     if (room?.password?.length > 0) {
       if (password) {
-        const isPasswordValid = await room.isPasswordCorrect(password);
+        const isPasswordValid = await bcrypt.compare(password, room.password);
 
         if (!isPasswordValid) {
           throw new ApiError(401, 'Invalid password');
@@ -156,8 +161,60 @@ const joinRoom = asyncHandler(async (req, res) => {
   res.status(200).json(new ApiResponse(200, { room }, 'Join Successfully.'));
 });
 
+const setRoomPassword = asyncHandler(async (req, res) => {
+  const { password, confirmPassword, roomId } = req.body;
+
+  const room = await Room.findOne({ roomId });
+
+  if (!room) {
+    throw new ApiError(404, 'Room not found');
+  }
+
+  if (room.admin.toString() !== req?.user?._id.toString()) {
+    throw new ApiError(403, 'You are not the admin of this room');
+  }
+
+  room.password = await bcrypt.hash(password, 10);
+
+  await room.save();
+
+  res
+    .status(200)
+    .json(new ApiResponse(200, { room }, 'Room password set successfully.'));
+});
+
+const toggleChatEnable = asyncHandler(async (req, res) => {
+  const { roomId } = req.params;
+
+  const room = await Room.findOne({ roomId });
+
+  if (!room) {
+    throw new ApiError(404, 'Room not found');
+  }
+
+  if (room.admin.toString() !== req?.user?._id.toString()) {
+    throw new ApiError(403, 'You are not the admin of this room');
+  }
+  const updateIsChatEnabled = !room.isChatEnable;
+  room.isChatEnable = updateIsChatEnabled;
+
+  await room.save();
+
+  emitSocketEvent(req, roomId, 'chat:toggle', {
+    isChatEnabled: updateIsChatEnabled,
+  });
+
+  res
+    .status(200)
+    .json(
+      new ApiResponse(200, { room }, 'Chat enabled/disabled successfully.')
+    );
+});
+
 module.exports = {
   createRoom,
   joinRoom,
   getRoomById,
+  setRoomPassword,
+  toggleChatEnable,
 };

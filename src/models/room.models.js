@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
 
 // Define the schema for a Room
 const roomSchema = new mongoose.Schema(
@@ -39,26 +38,14 @@ const roomSchema = new mongoose.Schema(
       type: Boolean, // Changed to Boolean for clarity
       default: true,
     },
+    isChatEnable: {
+      type: Boolean,
+      default: true,
+    },
   },
   { timestamps: true }
 );
 
-roomSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next();
-
-  try {
-    this.password = await bcrypt.hash(this.password, 10); // Await added
-    next();
-  } catch (err) {
-    next(err);
-  }
-});
-
-roomSchema.methods.isPasswordCorrect = async function (password) {
-  return await bcrypt.compare(password, this.password);
-};
-
-// Create the Room model
 const Room = mongoose.model('Room', roomSchema);
 
 module.exports = Room;

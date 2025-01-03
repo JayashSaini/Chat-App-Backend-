@@ -41,6 +41,40 @@ const joinRoomValidator = () => {
   ];
 };
 
+const setPasswordValidator = () => {
+  return [
+    // Password validation
+    body('password')
+      .trim()
+      .notEmpty()
+      .withMessage('Password cannot be empty')
+      .isLength({ min: 8 })
+      .withMessage('Password must be at least 8 characters long')
+      .matches(
+        /^(?=.*[a-zA-Z])(?=.*\d)[A-Za-z\d]{8,}$/, // Regex: At least one letter (upper/lowercase) and one number
+        'i'
+      )
+      .withMessage(
+        'Password must contain at least one alphabet and one number'
+      ),
+
+    // Confirm Password validation
+    body('confirmPassword')
+      .trim()
+      .notEmpty()
+      .withMessage('Confirm password cannot be empty')
+      .custom((value, { req }) => {
+        if (value !== req.body.password) {
+          throw new Error('Password and confirm password do not match');
+        }
+        return true;
+      }),
+
+    // Room ID validation
+    body('roomId').trim().notEmpty().withMessage('Room ID is required'),
+  ];
+};
 module.exports = {
   joinRoomValidator,
+  setPasswordValidator,
 };

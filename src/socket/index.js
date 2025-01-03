@@ -20,6 +20,18 @@ const mountParticipantTypingEvent = (socket) => {
   });
 };
 
+const mountRoomChatBoxEvents = (socket) => {
+  socket.on('user:send-message', ({ roomId, message }) => {
+    socket.in(roomId.toString()).emit('participants:received-message', message);
+  });
+  socket.on('user:typing', (roomId) => {
+    socket.in(roomId).emit('participants:typing');
+  });
+  socket.on('user:stop-typing', (roomId) => {
+    socket.in(roomId).emit('participants:stop-typing');
+  });
+};
+
 const mountParticipantStoppedTypingEvent = (socket) => {
   socket.on(ChatEventEnum.STOP_TYPING_EVENT, (chatId) => {
     socket.in(chatId).emit(ChatEventEnum.STOP_TYPING_EVENT, chatId);
@@ -77,27 +89,14 @@ const mountAdminRoomEvents = (socket, io) => {
             message: 'User socket not found',
           });
         }
-        const socketId = userSocket?.id;
 
         // check the requested user is already an admin
         if (user?._id?.toString() == room?.admin?.toString()) {
           await userSocket.join(room.roomId.toString());
+          room.isActive = true;
+          await room.save();
 
           io.to(user?._id?.toString()).emit('room:join:approved', { roomId });
-
-          return;
-        }
-
-        // Check user is already in the room
-        const participant = room.participants.find(
-          (participant) => participant.toString() === user?._id.toString()
-        );
-        if (participant) {
-          // Connect User Socket to room id
-          await userSocket.join(room.roomId.toString());
-
-          // Notify the approved user
-          io.to(socketId).emit('room:join:approved', { roomId });
 
           return;
         }
@@ -228,7 +227,7 @@ const mountConnectionSharingEvent = (socket, io) => {
   });
 };
 
-const mountLeaveRoom = (socket, io) => {
+const mountLeaveEvents = (socket, io) => {
   socket.on('leave-room', async (data) => {
     try {
       const { roomId, user } = data;
@@ -260,11 +259,27 @@ const mountLeaveRoom = (socket, io) => {
         io.to(roomId.toString()).emit('user:leave', {
           userId: user._id.toString(),
         });
-        await Room.findOneAndUpdate({ roomId }, { isActive: false });
+        await Room.findOneAndUpdate(
+          { roomId },
+          {
+            isActive: false,
+            $pull: {
+              participants: user._id.toString(), // Remove user from participants array
+            },
+          }
+        );
       } else {
         io.to(roomId.toString()).emit('user:leave', {
           userId: user._id.toString(),
         });
+        await Room.findOneAndUpdate(
+          { roomId },
+          {
+            $pull: {
+              participants: user._id.toString(), // Remove user from participants array
+            },
+          }
+        );
       }
 
       // Remove the user from the socket.io room
@@ -274,6 +289,36 @@ const mountLeaveRoom = (socket, io) => {
       socket.emit('error', {
         message: 'An error occurred while leaving the room',
       });
+    }
+  });
+  socket.on('admin:kick-user', async ({ userId, roomId }) => {
+    try {
+      const room = await Room.findOne({ roomId });
+      if (!room) {
+        return socket.emit('error', { message: 'Room not found' });
+      }
+
+      // Optimized user socket lookup (consider maintaining a user-to-socket map)
+      const userSocket = [...io.sockets.sockets.values()].find(
+        (socket) => socket?.user?._id.toString() === userId.toString()
+      );
+      if (!userSocket) {
+        return socket.emit('error', { message: 'User socket not found' });
+      }
+
+      const userSocketId = userSocket.id;
+
+      // Notify the kicked user
+      io.to(userSocketId).emit('user:kicked');
+
+      // Notify the room about the user leaving
+      io.to(roomId).emit('user:leave', { userId });
+
+      // Ensure the user leaves the room
+      await userSocket.leave(roomId);
+    } catch (err) {
+      console.error('Error handling admin:kick-user:', err);
+      socket.emit('error', { message: 'Internal server error' });
     }
   });
 };
@@ -320,10 +365,11 @@ const initializeSocketIO = (io) => {
       mountParticipantStoppedTypingEvent(socket);
       mountAdminRoomEvents(socket, io);
       mountConnectionSharingEvent(socket, io);
-      mountLeaveRoom(socket, io);
+      mountLeaveEvents(socket, io);
       moundParticipantMediaUpdate(socket);
       mountNotifyNewUserJoined(socket, io);
       mountParticipantFeatures(socket);
+      mountRoomChatBoxEvents(socket);
 
       socket.on(ChatEventEnum.DISCONNECT_EVENT, () => {
         console.log('User disconnected 🚫. userId: ' + socket.user?._id);
